@@ -24,3 +24,6 @@ __pycache__/
 # OS
 Thumbs.db
 .DS_Store
+
+# Nexus worktrees
+.nexus-worktrees/
