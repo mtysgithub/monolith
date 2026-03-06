@@ -1,6 +1,7 @@
 #include "MonolithAssetUtils.h"
 #include "MonolithJsonUtils.h"
 #include "AssetRegistry/AssetRegistryModule.h"
+#include "UObject/UObjectHash.h"
 #include "UObject/Package.h"
 
 FString FMonolithAssetUtils::ResolveAssetPath(const FString& InPath)
@@ -53,15 +54,23 @@ UObject* FMonolithAssetUtils::LoadAssetByPath(const FString& AssetPath)
 		return Asset;
 	}
 
-	// Try finding in already-loaded packages
+	// Build PackageName.ObjectName format — required for NiagaraSystem and other asset types
 	FString PackageName = FPackageName::ObjectPathToPackageName(Resolved);
 	FString ObjectName = FPackageName::ObjectPathToObjectName(Resolved);
 	if (ObjectName.IsEmpty())
 	{
-		// Assume object name matches package leaf
 		ObjectName = FPackageName::GetShortName(PackageName);
 	}
 
+	// Try PackageName.ObjectName format (how UE internally resolves many asset types)
+	FString FullObjectPath = PackageName + TEXT(".") + ObjectName;
+	Asset = StaticLoadObject(UObject::StaticClass(), nullptr, *FullObjectPath);
+	if (Asset)
+	{
+		return Asset;
+	}
+
+	// Load the package and search within it
 	UPackage* Package = LoadPackage(nullptr, *PackageName, LOAD_None);
 	if (Package)
 	{
@@ -71,11 +80,25 @@ UObject* FMonolithAssetUtils::LoadAssetByPath(const FString& AssetPath)
 			// Try with _C suffix for Blueprint generated classes
 			Asset = FindObject<UObject>(Package, *(ObjectName + TEXT("_C")));
 		}
+		if (!Asset)
+		{
+			// Last resort: iterate package for first non-transient object
+			// Handles assets whose internal name differs from package name
+			ForEachObjectWithPackage(Package, [&Asset](UObject* Obj)
+			{
+				if (!Obj->IsA<UPackage>() && !Obj->HasAnyFlags(RF_Transient))
+				{
+					Asset = Obj;
+					return false; // stop
+				}
+				return true; // continue
+			}, false);
+		}
 	}
 
 	if (!Asset)
 	{
-		UE_LOG(LogMonolith, Warning, TEXT("Failed to load asset: %s"), *Resolved);
+		UE_LOG(LogMonolith, Warning, TEXT("Failed to load asset: %s (tried: %s, %s)"), *AssetPath, *Resolved, *FullObjectPath);
 	}
 	return Asset;
 }

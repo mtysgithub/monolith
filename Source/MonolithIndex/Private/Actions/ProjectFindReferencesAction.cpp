@@ -7,7 +7,11 @@ FMonolithActionResult FProjectFindReferencesAction::Execute(const TSharedPtr<FJs
 	FString PackagePath = Params->GetStringField(TEXT("asset_path"));
 	if (PackagePath.IsEmpty())
 	{
-		return FMonolithActionResult::Error(TEXT("'asset_path' parameter is required"), -32602);
+		PackagePath = Params->GetStringField(TEXT("package_path"));
+	}
+	if (PackagePath.IsEmpty())
+	{
+		return FMonolithActionResult::Error(TEXT("'asset_path' (or 'package_path') parameter is required"), -32602);
 	}
 
 	UMonolithIndexSubsystem* Subsystem = GEditor->GetEditorSubsystem<UMonolithIndexSubsystem>();

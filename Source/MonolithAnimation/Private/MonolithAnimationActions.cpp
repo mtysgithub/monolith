@@ -855,6 +855,47 @@ FMonolithActionResult FMonolithAnimationActions::HandleGetTransitions(const TSha
 	UAnimBlueprint* ABP = FMonolithAssetUtils::LoadAssetByPath<UAnimBlueprint>(AssetPath);
 	if (!ABP) return FMonolithActionResult::Error(FString::Printf(TEXT("AnimBlueprint not found: %s"), *AssetPath));
 
+	// Helper lambda to collect transitions from a state machine graph
+	auto CollectTransitions = [](UAnimationStateMachineGraph* SMGraph, TArray<TSharedPtr<FJsonValue>>& OutArr)
+	{
+		for (UEdGraphNode* SMChildNode : SMGraph->Nodes)
+		{
+			UAnimStateTransitionNode* TransNode = Cast<UAnimStateTransitionNode>(SMChildNode);
+			if (!TransNode) continue;
+
+			TSharedPtr<FJsonObject> TransObj = MakeShared<FJsonObject>();
+			UAnimStateNode* PrevStateNode = Cast<UAnimStateNode>(TransNode->GetPreviousState());
+			UAnimStateNode* NextStateNode = Cast<UAnimStateNode>(TransNode->GetNextState());
+			TransObj->SetStringField(TEXT("from"), PrevStateNode ? PrevStateNode->GetStateName() : TEXT("?"));
+			TransObj->SetStringField(TEXT("to"), NextStateNode ? NextStateNode->GetStateName() : TEXT("?"));
+			TransObj->SetNumberField(TEXT("cross_fade_duration"), TransNode->CrossfadeDuration);
+			TransObj->SetStringField(TEXT("blend_mode"),
+				TransNode->BlendMode == EAlphaBlendOption::Linear ? TEXT("Linear") :
+				TransNode->BlendMode == EAlphaBlendOption::Cubic ? TEXT("Cubic") : TEXT("Other"));
+			TransObj->SetBoolField(TEXT("bidirectional"), TransNode->Bidirectional);
+
+			UEdGraph* RuleGraph = TransNode->GetBoundGraph();
+			TArray<TSharedPtr<FJsonValue>> RuleNodesArr;
+			if (RuleGraph)
+			{
+				for (UEdGraphNode* RuleNode : RuleGraph->Nodes)
+				{
+					TSharedPtr<FJsonObject> RuleObj = MakeShared<FJsonObject>();
+					RuleObj->SetStringField(TEXT("class"), RuleNode->GetClass()->GetName());
+					RuleObj->SetStringField(TEXT("title"), RuleNode->GetNodeTitle(ENodeTitleType::FullTitle).ToString());
+					RuleNodesArr.Add(MakeShared<FJsonValueObject>(RuleObj));
+				}
+			}
+			TransObj->SetArrayField(TEXT("rule_nodes"), RuleNodesArr);
+			OutArr.Add(MakeShared<FJsonValueObject>(TransObj));
+		}
+	};
+
+	// If machine_name is empty, return transitions from ALL state machines
+	bool bMatchAll = MachineName.IsEmpty();
+	TArray<TSharedPtr<FJsonValue>> AllTransitionsArr;
+	bool bFoundAny = false;
+
 	for (UEdGraph* Graph : ABP->FunctionGraphs)
 	{
 		if (!Graph) continue;
@@ -864,54 +905,36 @@ FMonolithActionResult FMonolithAnimationActions::HandleGetTransitions(const TSha
 			if (!SMNode) continue;
 
 			FString SMTitle = SMNode->GetNodeTitle(ENodeTitleType::FullTitle).ToString();
-			if (!SMTitle.Contains(MachineName)) continue;
+			if (!bMatchAll && !SMTitle.Contains(MachineName)) continue;
 
 			UAnimationStateMachineGraph* SMGraph = Cast<UAnimationStateMachineGraph>(SMNode->EditorStateMachineGraph);
 			if (!SMGraph) continue;
 
-			TSharedPtr<FJsonObject> Root = MakeShared<FJsonObject>();
-			Root->SetStringField(TEXT("machine_name"), MachineName);
-			TArray<TSharedPtr<FJsonValue>> TransitionsArr;
+			bFoundAny = true;
 
-			for (UEdGraphNode* SMChildNode : SMGraph->Nodes)
+			if (!bMatchAll)
 			{
-				UAnimStateTransitionNode* TransNode = Cast<UAnimStateTransitionNode>(SMChildNode);
-				if (!TransNode) continue;
-
-				TSharedPtr<FJsonObject> TransObj = MakeShared<FJsonObject>();
-				UAnimStateNode* PrevStateNode = Cast<UAnimStateNode>(TransNode->GetPreviousState());
-				UAnimStateNode* NextStateNode = Cast<UAnimStateNode>(TransNode->GetNextState());
-				TransObj->SetStringField(TEXT("from"), PrevStateNode ? PrevStateNode->GetStateName() : TEXT("?"));
-				TransObj->SetStringField(TEXT("to"), NextStateNode ? NextStateNode->GetStateName() : TEXT("?"));
-				TransObj->SetNumberField(TEXT("cross_fade_duration"), TransNode->CrossfadeDuration);
-				TransObj->SetStringField(TEXT("blend_mode"),
-					TransNode->BlendMode == EAlphaBlendOption::Linear ? TEXT("Linear") :
-					TransNode->BlendMode == EAlphaBlendOption::Cubic ? TEXT("Cubic") : TEXT("Other"));
-				TransObj->SetBoolField(TEXT("bidirectional"), TransNode->Bidirectional);
-
-				UEdGraph* RuleGraph = TransNode->GetBoundGraph();
-				TArray<TSharedPtr<FJsonValue>> RuleNodesArr;
-				if (RuleGraph)
-				{
-					for (UEdGraphNode* RuleNode : RuleGraph->Nodes)
-					{
-						TSharedPtr<FJsonObject> RuleObj = MakeShared<FJsonObject>();
-						RuleObj->SetStringField(TEXT("class"), RuleNode->GetClass()->GetName());
-						RuleObj->SetStringField(TEXT("title"), RuleNode->GetNodeTitle(ENodeTitleType::FullTitle).ToString());
-						RuleNodesArr.Add(MakeShared<FJsonValueObject>(RuleObj));
-					}
-				}
-				TransObj->SetArrayField(TEXT("rule_nodes"), RuleNodesArr);
-				TransitionsArr.Add(MakeShared<FJsonValueObject>(TransObj));
+				// Specific machine match — return immediately
+				TSharedPtr<FJsonObject> Root = MakeShared<FJsonObject>();
+				Root->SetStringField(TEXT("machine_name"), MachineName);
+				TArray<TSharedPtr<FJsonValue>> TransitionsArr;
+				CollectTransitions(SMGraph, TransitionsArr);
+				Root->SetArrayField(TEXT("transitions"), TransitionsArr);
+				Root->SetNumberField(TEXT("count"), TransitionsArr.Num());
+				return FMonolithActionResult::Success(Root);
 			}
 
-			Root->SetArrayField(TEXT("transitions"), TransitionsArr);
-			Root->SetNumberField(TEXT("count"), TransitionsArr.Num());
-			return FMonolithActionResult::Success(Root);
+			// Collect from all machines
+			CollectTransitions(SMGraph, AllTransitionsArr);
 		}
 	}
 
-	return FMonolithActionResult::Error(FString::Printf(TEXT("State machine '%s' not found"), *MachineName));
+	// Return collected results (may be empty)
+	auto Result = MakeShared<FJsonObject>();
+	Result->SetStringField(TEXT("machine_name"), MachineName);
+	Result->SetArrayField(TEXT("transitions"), AllTransitionsArr);
+	Result->SetNumberField(TEXT("count"), AllTransitionsArr.Num());
+	return FMonolithActionResult::Success(Result);
 }
 
 FMonolithActionResult FMonolithAnimationActions::HandleGetBlendNodes(const TSharedPtr<FJsonObject>& Params)

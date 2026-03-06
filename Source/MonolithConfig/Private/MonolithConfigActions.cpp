@@ -145,6 +145,35 @@ FMonolithActionResult FMonolithConfigActions::ExplainSetting(const TSharedPtr<FJ
 	FString Section = Params->GetStringField(TEXT("section"));
 	FString Key = Params->GetStringField(TEXT("key"));
 
+	// Convenience: if 'setting' param provided instead of file/section/key, search for it
+	if (Category.IsEmpty() && Section.IsEmpty() && Key.IsEmpty())
+	{
+		FString Setting = Params->GetStringField(TEXT("setting"));
+		if (!Setting.IsEmpty())
+		{
+			Key = Setting;
+			// Search common config categories for this key
+			TArray<FString> SearchCategories = { TEXT("Engine"), TEXT("Game"), TEXT("Input"), TEXT("Editor") };
+			for (const FString& Cat : SearchCategories)
+			{
+				FString ConfigFile = GConfig->GetConfigFilename(*Cat);
+				TArray<FString> SectionNames;
+				GConfig->GetSectionNames(ConfigFile, SectionNames);
+				for (const FString& Sec : SectionNames)
+				{
+					FString Value;
+					if (GConfig->GetString(*Sec, *Setting, Value, ConfigFile))
+					{
+						Category = Cat;
+						Section = Sec;
+						break;
+					}
+				}
+				if (!Category.IsEmpty()) break;
+			}
+		}
+	}
+
 	TArray<TPair<FString, FString>> Hierarchy = GetConfigHierarchy(Category);
 
 	TArray<TSharedPtr<FJsonValue>> LayersArray;
@@ -283,6 +312,16 @@ FMonolithActionResult FMonolithConfigActions::DiffFromDefault(const TSharedPtr<F
 {
 	FString Category = Params->GetStringField(TEXT("file"));
 	FString FilterSection = Params->HasField(TEXT("section")) ? Params->GetStringField(TEXT("section")) : TEXT("");
+
+	// Strip 'Default' or 'Base' prefix if user passed it (e.g. "DefaultEngine" -> "Engine")
+	if (Category.StartsWith(TEXT("Default")))
+	{
+		Category = Category.Mid(7);
+	}
+	else if (Category.StartsWith(TEXT("Base")))
+	{
+		Category = Category.Mid(4);
+	}
 
 	FString BaseFilePath = FPaths::Combine(FPaths::EngineConfigDir(), FString::Printf(TEXT("Base%s.ini"), *Category));
 	FString DefaultFilePath = FPaths::Combine(FPaths::ProjectConfigDir(), FString::Printf(TEXT("Default%s.ini"), *Category));

@@ -5,12 +5,16 @@
 FMonolithActionResult FProjectFindByTypeAction::Execute(const TSharedPtr<FJsonObject>& Params)
 {
 	FString AssetClass = Params->GetStringField(TEXT("asset_type"));
+	if (AssetClass.IsEmpty())
+	{
+		AssetClass = Params->GetStringField(TEXT("asset_class"));
+	}
 	int32 Limit = Params->HasField(TEXT("limit")) ? Params->GetIntegerField(TEXT("limit")) : 100;
 	int32 Offset = Params->HasField(TEXT("offset")) ? Params->GetIntegerField(TEXT("offset")) : 0;
 
 	if (AssetClass.IsEmpty())
 	{
-		return FMonolithActionResult::Error(TEXT("'asset_type' parameter is required"), -32602);
+		return FMonolithActionResult::Error(TEXT("'asset_type' (or 'asset_class') parameter is required"), -32602);
 	}
 
 	UMonolithIndexSubsystem* Subsystem = GEditor->GetEditorSubsystem<UMonolithIndexSubsystem>();

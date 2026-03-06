@@ -940,11 +940,25 @@ TSharedPtr<FJsonObject> FMonolithIndexDatabase::GetAssetDetails(const FString& P
 	}
 	Details->SetArrayField(TEXT("variables"), VarsArr);
 
-	// Dependencies
+	// Dependencies — wrap in safety check to prevent invalid JSON propagation
 	auto Refs = FindReferences(PackagePath);
 	if (Refs.IsValid())
 	{
-		Details->SetObjectField(TEXT("references"), Refs);
+		// Validate the references object can serialize cleanly
+		FString SerializedRefs;
+		auto Writer = TJsonWriterFactory<>::Create(&SerializedRefs);
+		if (FJsonSerializer::Serialize(Refs.ToSharedRef(), Writer))
+		{
+			Details->SetObjectField(TEXT("references"), Refs);
+		}
+		else
+		{
+			// Fallback: provide empty references rather than invalid JSON
+			auto EmptyRefs = MakeShared<FJsonObject>();
+			EmptyRefs->SetArrayField(TEXT("depends_on"), TArray<TSharedPtr<FJsonValue>>());
+			EmptyRefs->SetArrayField(TEXT("referenced_by"), TArray<TSharedPtr<FJsonValue>>());
+			Details->SetObjectField(TEXT("references"), EmptyRefs);
+		}
 	}
 
 	return Details;
